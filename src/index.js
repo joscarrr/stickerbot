@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { promisify } from 'node:util';
 import ffmpegPath from 'ffmpeg-static';
+import webpmux from 'node-webpmux';
 import qrcode from 'qrcode-terminal';
 import sharp from 'sharp';
 import pkg from 'whatsapp-web.js';
@@ -16,7 +17,7 @@ const stickerAuthor = process.env.STICKER_AUTHOR || 'Sticker Bot';
 const stickerPack = process.env.STICKER_PACK || 'Mis Stickers';
 const maxVideoSeconds = parsePositiveNumber(process.env.MAX_VIDEO_SECONDS, 6);
 const animatedStickerFps = parsePositiveNumber(process.env.ANIMATED_STICKER_FPS, 15);
-const maxAnimatedStickerBytes = parsePositiveNumber(process.env.MAX_ANIMATED_STICKER_BYTES, 950000);
+const maxAnimatedStickerBytes = parsePositiveNumber(process.env.MAX_ANIMATED_STICKER_BYTES, 500000);
 let isReady = false;
 
 console.log('Iniciando bot de WhatsApp...');
@@ -74,6 +75,10 @@ client.on('message', async (message) => {
       return;
     }
 
+    if (media.mimetype.startsWith('video/')) {
+      await message.reply('Estoy procesando tu video. Puede tardar unos segundos.');
+    }
+
     const sticker = await buildSticker(media);
     await client.sendMessage(message.from, sticker, {
       sendMediaAsSticker: true,
@@ -99,8 +104,12 @@ setTimeout(() => {
 }, 60000);
 
 async function buildSticker(media) {
-  if (isAnimatedMedia(media.mimetype)) {
-    return buildAnimatedSticker(media);
+  if (media.mimetype === 'image/gif') {
+    return buildGifSticker(media);
+  }
+
+  if (media.mimetype.startsWith('video/')) {
+    return buildVideoSticker(media);
   }
 
   const input = Buffer.from(media.data, 'base64');
@@ -118,7 +127,46 @@ async function buildSticker(media) {
   return new MessageMedia('image/webp', output.toString('base64'), 'sticker.webp');
 }
 
-async function buildAnimatedSticker(media) {
+async function buildGifSticker(media) {
+  const input = Buffer.from(media.data, 'base64');
+  const maxGifPages = Math.ceil(maxVideoSeconds * animatedStickerFps);
+  const gifMetadata = await sharp(input, { animated: true, limitInputPixels: false }).metadata();
+  const sharpOptions = {
+    animated: true,
+    limitInputPixels: false
+  };
+
+  if (gifMetadata.pages && gifMetadata.pages > maxGifPages) {
+    sharpOptions.pages = maxGifPages;
+  }
+
+  for (const quality of [80, 65, 50, 35]) {
+    const output = await sharp(input, sharpOptions)
+      .resize(512, 512, {
+        fit: 'contain',
+        background: { r: 0, g: 0, b: 0, alpha: 0 }
+      })
+      .webp({
+        quality,
+        effort: 5,
+        loop: 0
+      })
+      .toBuffer();
+
+    await inspectWebp(output, 'GIF');
+    if (output.byteLength <= maxAnimatedStickerBytes) {
+      return new MessageMedia('image/webp', output.toString('base64'), 'sticker.webp');
+    }
+  }
+
+  return buildAnimatedStickerWithFfmpeg(media, 'GIF');
+}
+
+async function buildVideoSticker(media) {
+  return buildAnimatedStickerWithFfmpeg(media, 'video');
+}
+
+async function buildAnimatedStickerWithFfmpeg(media, sourceType) {
   if (!ffmpegPath) {
     throw new Error('ffmpeg-static no encontro un binario de ffmpeg para esta plataforma.');
   }
@@ -131,6 +179,7 @@ async function buildAnimatedSticker(media) {
     await writeFile(inputPath, Buffer.from(media.data, 'base64'));
 
     const output = await convertAnimatedSticker(inputPath, outputPath);
+    await assertValidWebp(output, sourceType);
     return new MessageMedia('image/webp', output.toString('base64'), 'sticker.webp');
   } finally {
     await rm(workdir, { recursive: true, force: true });
@@ -138,7 +187,7 @@ async function buildAnimatedSticker(media) {
 }
 
 async function convertAnimatedSticker(inputPath, outputPath) {
-  for (const quality of [80, 65, 50]) {
+  for (const quality of [75, 60, 45, 30, 20]) {
     await runFile(ffmpegPath, [
       '-loglevel',
       'error',
@@ -169,20 +218,16 @@ async function convertAnimatedSticker(inputPath, outputPath) {
     ]);
 
     const output = await readFile(outputPath);
-    if (output.byteLength <= maxAnimatedStickerBytes || quality === 50) {
+    if (output.byteLength <= maxAnimatedStickerBytes) {
       return output;
     }
   }
 
-  throw new Error('No se pudo crear el sticker animado.');
+  throw new Error(`No se pudo crear un sticker animado menor a ${maxAnimatedStickerBytes} bytes.`);
 }
 
 function isSupportedMedia(mimetype = '') {
   return mimetype.startsWith('image/') || mimetype.startsWith('video/');
-}
-
-function isAnimatedMedia(mimetype = '') {
-  return mimetype === 'image/gif' || mimetype.startsWith('video/');
 }
 
 function extensionFor(mimetype = '') {
@@ -200,4 +245,21 @@ function extensionFor(mimetype = '') {
 function parsePositiveNumber(value, fallback) {
   const number = Number(value);
   return Number.isFinite(number) && number > 0 ? number : fallback;
+}
+
+async function assertValidWebp(buffer, sourceType) {
+  await inspectWebp(buffer, sourceType);
+
+  if (buffer.byteLength > maxAnimatedStickerBytes) {
+    throw new Error(`El ${sourceType} quedo demasiado pesado para sticker animado.`);
+  }
+}
+
+async function inspectWebp(buffer, sourceType) {
+  const image = new webpmux.Image();
+  await image.load(buffer);
+
+  if (image.frames && image.frames.length > 0 && image.frames.length < 2) {
+    console.log(`El ${sourceType} solo tiene un frame; se enviara como sticker estatico.`);
+  }
 }

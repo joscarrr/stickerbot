@@ -27,6 +27,7 @@ WhatsApp > Dispositivos vinculados > Vincular un dispositivo
 - El bot procesa el archivo automaticamente y envia el sticker.
 - Si mandas varios archivos, procesa cada uno como sticker separado.
 - Solo envia mensajes de texto cuando ocurre un error.
+- Para videos, envia un aviso de procesamiento porque pueden tardar unos segundos.
 
 Los videos se recortan a los primeros segundos configurados y se convierten en stickers animados tipo GIF.
 Puedes mandar varias imagenes, GIFs o videos; WhatsApp los entrega como mensajes separados y el bot procesa cada uno automaticamente.
@@ -40,7 +41,7 @@ STICKER_AUTHOR=Sticker Bot
 STICKER_PACK=Mis Stickers
 MAX_VIDEO_SECONDS=6
 ANIMATED_STICKER_FPS=15
-MAX_ANIMATED_STICKER_BYTES=950000
+MAX_ANIMATED_STICKER_BYTES=500000
 ```
 
 Cada imagen, GIF o video recibido se convertira automaticamente en sticker.
