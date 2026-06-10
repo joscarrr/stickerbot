@@ -1,0 +1,18 @@
+{
+  "name": "whatsapp-sticker-bot",
+  "version": "1.0.0",
+  "description": "Bot de WhatsApp para convertir imagenes en stickers.",
+  "main": "src/index.js",
+  "type": "module",
+  "scripts": {
+    "start": "node src/index.js",
+    "dev": "node --watch src/index.js"
+  },
+  "dependencies": {
+    "dotenv": "^16.4.7",
+    "ffmpeg-static": "^5.3.0",
+    "qrcode-terminal": "^0.12.0",
+    "sharp": "^0.33.5",
+    "whatsapp-web.js": "^1.34.7"
+  }
+}
