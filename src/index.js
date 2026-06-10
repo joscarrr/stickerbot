@@ -18,6 +18,9 @@ const stickerPack = process.env.STICKER_PACK || 'Mis Stickers';
 const maxVideoSeconds = parsePositiveNumber(process.env.MAX_VIDEO_SECONDS, 6);
 const animatedStickerFps = parsePositiveNumber(process.env.ANIMATED_STICKER_FPS, 15);
 const maxAnimatedStickerBytes = parsePositiveNumber(process.env.MAX_ANIMATED_STICKER_BYTES, 500000);
+const conversionTimeoutMs = parsePositiveNumber(process.env.CONVERSION_TIMEOUT_MS, 45000);
+const animatedQueue = [];
+let isProcessingAnimatedQueue = false;
 let isReady = false;
 
 console.log('Iniciando bot de WhatsApp...');
@@ -75,11 +78,24 @@ client.on('message', async (message) => {
       return;
     }
 
-    if (media.mimetype.startsWith('video/')) {
-      await message.reply('Estoy procesando tu video. Puede tardar unos segundos.');
+    const isWhatsAppGif = Boolean(message.isGif);
+    const isAnimatedMedia = media.mimetype === 'image/gif' || media.mimetype.startsWith('video/');
+
+    if (isAnimatedMedia) {
+      enqueueAnimatedJob({
+        message,
+        media,
+        isGif: isWhatsAppGif || media.mimetype === 'image/gif',
+        sourceType: isWhatsAppGif || media.mimetype === 'image/gif' ? 'GIF' : 'video'
+      });
+      return;
     }
 
-    const sticker = await buildSticker(media);
+    const sticker = await withTimeout(
+      buildSticker(media),
+      conversionTimeoutMs,
+      'La conversion tardo demasiado.'
+    );
     await client.sendMessage(message.from, sticker, {
       sendMediaAsSticker: true,
       stickerAuthor,
@@ -103,13 +119,64 @@ setTimeout(() => {
   }
 }, 60000);
 
-async function buildSticker(media) {
+function enqueueAnimatedJob(job) {
+  animatedQueue.push(job);
+
+  const position = animatedQueue.length + (isProcessingAnimatedQueue ? 1 : 0);
+  if (position > 1) {
+    job.message.reply(`${labelFor(job.sourceType)} en cola. Posicion ${position}.`).catch((error) => {
+      console.error('Error avisando cola:', error);
+    });
+  }
+
+  processAnimatedQueue().catch((error) => {
+    console.error('Error procesando cola de animados:', error);
+  });
+}
+
+async function processAnimatedQueue() {
+  if (isProcessingAnimatedQueue) return;
+  isProcessingAnimatedQueue = true;
+
+  try {
+    while (animatedQueue.length > 0) {
+      const job = animatedQueue.shift();
+
+      try {
+        await job.message.reply(`Estoy procesando tu ${labelFor(job.sourceType).toLowerCase()}. Puede tardar unos segundos.`);
+
+        const sticker = await withTimeout(
+          buildSticker(job.media, { isGif: job.isGif }),
+          conversionTimeoutMs,
+          'La conversion tardo demasiado.'
+        );
+
+        await client.sendMessage(job.message.from, sticker, {
+          sendMediaAsSticker: true,
+          stickerAuthor,
+          stickerName: stickerPack
+        });
+      } catch (error) {
+        console.error(`Error creando sticker de ${job.sourceType}:`, error);
+        await job.message.reply(`Algo salio mal procesando tu ${labelFor(job.sourceType).toLowerCase()}. Intenta con otro archivo o uno mas corto.`);
+      }
+    }
+  } finally {
+    isProcessingAnimatedQueue = false;
+  }
+}
+
+async function buildSticker(media, options = {}) {
   if (media.mimetype === 'image/gif') {
     return buildGifSticker(media);
   }
 
+  if (options.isGif && media.mimetype.startsWith('video/')) {
+    return buildVideoSticker(media, 'GIF');
+  }
+
   if (media.mimetype.startsWith('video/')) {
-    return buildVideoSticker(media);
+    return buildVideoSticker(media, 'video');
   }
 
   const input = Buffer.from(media.data, 'base64');
@@ -162,8 +229,8 @@ async function buildGifSticker(media) {
   return buildAnimatedStickerWithFfmpeg(media, 'GIF');
 }
 
-async function buildVideoSticker(media) {
-  return buildAnimatedStickerWithFfmpeg(media, 'video');
+async function buildVideoSticker(media, sourceType) {
+  return buildAnimatedStickerWithFfmpeg(media, sourceType);
 }
 
 async function buildAnimatedStickerWithFfmpeg(media, sourceType) {
@@ -215,7 +282,7 @@ async function convertAnimatedSticker(inputPath, outputPath) {
       '-compression_level',
       '6',
       outputPath
-    ]);
+    ], { timeout: conversionTimeoutMs });
 
     const output = await readFile(outputPath);
     if (output.byteLength <= maxAnimatedStickerBytes) {
@@ -245,6 +312,24 @@ function extensionFor(mimetype = '') {
 function parsePositiveNumber(value, fallback) {
   const number = Number(value);
   return Number.isFinite(number) && number > 0 ? number : fallback;
+}
+
+function labelFor(sourceType) {
+  return sourceType === 'GIF' ? 'GIF' : 'video';
+}
+
+async function withTimeout(promise, timeoutMs, message) {
+  let timeout;
+
+  const timer = new Promise((_, reject) => {
+    timeout = setTimeout(() => reject(new Error(message)), timeoutMs);
+  });
+
+  try {
+    return await Promise.race([promise, timer]);
+  } finally {
+    clearTimeout(timeout);
+  }
 }
 
 async function assertValidWebp(buffer, sourceType) {
