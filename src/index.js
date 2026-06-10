@@ -17,7 +17,7 @@ const stickerAuthor = process.env.STICKER_AUTHOR || 'Sticker Bot';
 const stickerPack = process.env.STICKER_PACK || 'Mis Stickers';
 const maxVideoSeconds = parsePositiveNumber(process.env.MAX_VIDEO_SECONDS, 6);
 const animatedStickerFps = parsePositiveNumber(process.env.ANIMATED_STICKER_FPS, 15);
-const maxAnimatedStickerBytes = parsePositiveNumber(process.env.MAX_ANIMATED_STICKER_BYTES, 500000);
+const maxAnimatedStickerBytes = parsePositiveNumber(process.env.MAX_ANIMATED_STICKER_BYTES, 950000);
 const conversionTimeoutMs = parsePositiveNumber(process.env.CONVERSION_TIMEOUT_MS, 45000);
 const animatedQueue = [];
 let isProcessingAnimatedQueue = false;
@@ -207,7 +207,7 @@ async function buildGifSticker(media) {
     sharpOptions.pages = maxGifPages;
   }
 
-  for (const quality of [80, 65, 50, 35]) {
+  for (const quality of [88, 76]) {
     const output = await sharp(input, sharpOptions)
       .resize(512, 512, {
         fit: 'contain',
@@ -215,7 +215,7 @@ async function buildGifSticker(media) {
       })
       .webp({
         quality,
-        effort: 5,
+        effort: 3,
         loop: 0
       })
       .toBuffer();
@@ -254,7 +254,7 @@ async function buildAnimatedStickerWithFfmpeg(media, sourceType) {
 }
 
 async function convertAnimatedSticker(inputPath, outputPath) {
-  for (const quality of [75, 60, 45, 30, 20]) {
+  for (const quality of [85, 72]) {
     await runFile(ffmpegPath, [
       '-loglevel',
       'error',
@@ -280,7 +280,7 @@ async function convertAnimatedSticker(inputPath, outputPath) {
       '-quality',
       String(quality),
       '-compression_level',
-      '6',
+      '3',
       outputPath
     ], { timeout: conversionTimeoutMs });
 
